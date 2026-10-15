@@ -69,7 +69,7 @@ def changed(root, base):
 
 
 def syntax_only(entry, source):
-    arguments = shlex.split(entry["command"])
+    arguments = command_arguments(entry["command"])
     directory = Path(entry["directory"])
     wanted = source.resolve()
     trimmed = []
@@ -93,6 +93,26 @@ def syntax_only(entry, source):
         index += 1
     trimmed += ["-fsyntax-only", str(wanted)]
     return trimmed
+
+
+def command_arguments(command):
+    if os.name != "nt":
+        return shlex.split(command)
+    import ctypes
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    count = ctypes.c_int()
+    arguments = shell.CommandLineToArgvW(command, ctypes.byref(count))
+    if not arguments:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return list(arguments[:count.value])
+    finally:
+        kernel.LocalFree(ctypes.cast(arguments, ctypes.c_void_p))
 
 
 def check(root, build, files):

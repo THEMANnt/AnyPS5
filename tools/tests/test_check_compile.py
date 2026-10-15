@@ -87,6 +87,23 @@ class CheckCompileTests(unittest.TestCase):
         self.assertIn("orphan.cpp: no compile command in", result.stderr)
         self.assertIn("no translation unit to check in", result.stderr)
 
+    @unittest.skipUnless(os.name == "nt", "Windows command-line quoting")
+    def test_windows_commands_preserve_unquoted_backslashes_and_quoted_arguments(self):
+        source = self.source("src/unit.cpp")
+        script = self.compiler(
+            "import json\nimport sys\nfrom pathlib import Path\n"
+            "Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\n")
+        seen = self.root / "arguments.json"
+        include = str(self.root / "include files")
+        define = '-DNAME="a b"'
+        arguments = [sys.executable, str(script), str(seen), '-I' + include, define,
+                     '-c', '-o', 'obj\\unit.o', '-MF', 'obj\\unit.d', str(source)]
+        self.manifest([self.entry("src/unit.cpp", subprocess.list2cmdline(arguments))])
+        result = self.tool("src/unit.cpp")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(seen.read_text(encoding="utf-8")),
+                         ['-I' + include, define, '-fsyntax-only', str(source)])
+
     def test_a_translation_unit_outside_the_build_is_reported_but_the_others_decide(self):
         source = self.source("unit.cpp")
         script = self.compiler("import sys\nsys.exit(0)\n")
