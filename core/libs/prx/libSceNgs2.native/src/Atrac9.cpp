@@ -410,6 +410,15 @@ int APS5_VABI sceNgs2CalcWaveformBlock(const Ngs2WaveformFormat* format, uint32_
     if (format == nullptr || format->num_channels == 0 || format->num_channels > NGS2_MAX_CHANNELS || format->sample_rate == 0 || format->sample_rate > MAX_SAMPLE_RATE) {
         return SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT;
     }
+    if (format->waveform_type == SCE_NGS2_WAVEFORM_TYPE_PCM_I16L) {
+        if (format->config_data != 0 || format->frame_offset != 0 || format->frame_margin != 0)
+            throw std::runtime_error("NGS2: PCM waveform block configuration, frame offset and margin are not implemented");
+        const std::uint64_t frameBytes = static_cast<std::uint64_t>(format->num_channels) * sizeof(std::int16_t);
+        block->data_offset = sample_pos * frameBytes;
+        block->data_size = num_samples * frameBytes;
+        block->num_samples = num_samples;
+        return SCE_NGS2_OK;
+    }
     if (format->waveform_type != SCE_NGS2_WAVEFORM_TYPE_ATRAC9) throw std::runtime_error("NGS2: waveform blocks of type " + Ngs2Hex(format->waveform_type) + " are not implemented");
     Atrac9CodecInfo codec{};
     if (!MatchingCodecInfo(*format, codec)) return SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT;

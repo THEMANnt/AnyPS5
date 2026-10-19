@@ -92,6 +92,50 @@ static void TestErrorsAndInfo() {
     Require(sceNgs2SystemGetInfo(system, &info, sizeof(info)) == SCE_NGS2_ERROR_INVALID_SYSTEM_HANDLE);
 }
 
+static void TestCalculatedPcmBlock() {
+    Ngs2WaveformFormat format{SCE_NGS2_WAVEFORM_TYPE_PCM_I16L, 1, 48000, 0, 0, 0};
+    Ngs2WaveformBlock block{};
+    Require(sceNgs2CalcWaveformBlock(nullptr, 0, 1, nullptr) == SCE_NGS2_ERROR_INVALID_OUT_ADDRESS);
+    Require(sceNgs2CalcWaveformBlock(nullptr, 0, 1, &block) == SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT);
+    for (const auto invalid : {Ngs2WaveformFormat{0x12, 0, 48000, 0, 0, 0}, Ngs2WaveformFormat{0x12, 9, 48000, 0, 0, 0},
+            Ngs2WaveformFormat{0x12, 1, 0, 0, 0, 0}, Ngs2WaveformFormat{0x12, 1, UINT32_MAX, 0, 0, 0}}) {
+        block = {1, 2, 3, 4, 5, 6, 7};
+        Require(sceNgs2CalcWaveformBlock(&invalid, 0, 1, &block) == SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT);
+        Require(block.data_offset == 0 && block.data_size == 0 && block.num_samples == 0 && block.user_data == 0);
+    }
+    for (auto field : {&Ngs2WaveformFormat::config_data, &Ngs2WaveformFormat::frame_offset, &Ngs2WaveformFormat::frame_margin, &Ngs2WaveformFormat::waveform_type}) {
+        auto unsupported = format;
+        unsupported.*field = UINT32_MAX;
+        bool threw = false;
+        try { sceNgs2CalcWaveformBlock(&unsupported, 0, 1, &block); } catch (const std::runtime_error&) { threw = true; }
+        Require(threw);
+    }
+    for (std::uint32_t channels : {1u, 2u, 8u}) {
+        const Ngs2WaveformFormat format{SCE_NGS2_WAVEFORM_TYPE_PCM_I16L, channels, 48000, 0, 0, 0};
+        Ngs2WaveformBlock block{};
+        Require(sceNgs2CalcWaveformBlock(&format, UINT32_MAX, UINT32_MAX, &block) == SCE_NGS2_OK);
+        Require(block.data_offset == std::uint64_t{UINT32_MAX} * channels * 2 && block.data_size == block.data_offset);
+        Require(block.num_samples == UINT32_MAX && block.num_skip_samples == 0 && block.num_repeats == 0 && block.reserved == 0 && block.user_data == 0);
+        Require(sceNgs2CalcWaveformBlock(&format, 3, 0, &block) == SCE_NGS2_OK);
+        Require(block.data_offset == channels * 6 && block.data_size == 0 && block.num_samples == 0);
+        Require(sceNgs2CalcWaveformBlock(&format, 3, Grain - 2, &block) == SCE_NGS2_OK);
+        std::vector<std::int16_t> pcm((Grain + 3) * channels);
+        for (std::size_t i = 0; i < pcm.size(); ++i) pcm[i] = static_cast<std::int16_t>(i * 128 - 8192);
+        const auto system = CreateSystem();
+        const auto voice = Voice(CreateRack(system, SCE_NGS2_RACK_ID_SAMPLER));
+        Control(voice, SCE_NGS2_SAMPLER_VOICE_PARAM_SETUP, Ngs2SamplerVoiceSetupParam{{}, format});
+        Control(voice, SCE_NGS2_SAMPLER_VOICE_PARAM_ADD_WAVEFORM_BLOCKS, Ngs2SamplerVoiceWaveformBlocksParam{{}, pcm.data(), 0, 1, &block});
+        Patch(voice, Mastering(system, channels));
+        Event(voice, SCE_NGS2_VOICE_EVENT_PLAY);
+        std::vector<std::int16_t> out(Grain * channels, -1);
+        const Ngs2RenderBufferInfo info{out.data(), out.size() * sizeof(std::int16_t), SCE_NGS2_WAVEFORM_TYPE_PCM_I16L, channels};
+        Require(sceNgs2SystemRender(system, &info, 1) == SCE_NGS2_OK);
+        for (std::size_t i = 0; i < out.size(); ++i) Require(out[i] == (i < (Grain - 2) * channels ? pcm[3 * channels + i] : 0));
+        Require(Flags(voice) == 0);
+        Require(sceNgs2SystemDestroy(system, nullptr) == SCE_NGS2_OK);
+    }
+}
+
 static void TestPcmBlockEnd() {
     const auto system = CreateSystem();
     const auto master = Mastering(system, 1);
@@ -1121,6 +1165,7 @@ static void RenderAfterStaticTeardown() {
 }
 
 int main() {
+    TestCalculatedPcmBlock();
     Require(std::atexit(RenderAfterStaticTeardown) == 0);
     TestErrorsAndInfo();
     TestPcmBlockEnd();
