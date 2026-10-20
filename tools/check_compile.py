@@ -11,7 +11,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 CPP = (".cpp", ".cc", ".cxx", ".c")
-DROP = ("-c", "-MD", "-MMD", "-MP")
+DROP = ("-c", "-MD", "-MMD", "-MP", "-save-temps", "--save-temps")
 DROP_WITH_VALUE = ("-o", "-MT", "-MF", "-MQ", "-MJ")
 
 
@@ -126,7 +126,7 @@ def syntax_arguments(arguments, directory, source):
         if argument in DROP_WITH_VALUE:
             index += 2
             continue
-        if argument in DROP or argument.startswith(("-MT", "-MF", "-MQ", "-MJ")):
+        if argument in DROP or argument.startswith(("-MT", "-MF", "-MQ", "-MJ", "-save-temps=", "--save-temps=")):
             index += 1
             continue
         if not argument.startswith("-"):

@@ -181,7 +181,9 @@ class CheckCompileTests(unittest.TestCase):
             "Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\n")
         seen = self.root / "arguments.json"
         self.manifest([self.entry("unit.cpp", f'"{sys.executable}" "{script}" "{seen}" -c -o unit.o '
-                                                f'-MD -MT unit.o -MF unit.o.d "{source}"')])
+                                                f'-MD -MT unit.o -MF unit.o.d -save-temps -save-temps=cwd '
+                                                f'-save-temps=obj --save-temps --save-temps=cwd '
+                                                f'--save-temps=obj "{source}"')])
         result = self.tool("unit.cpp")
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(seen.read_text(encoding="utf-8")), ["-fsyntax-only", str(source)])
@@ -477,6 +479,45 @@ class CheckCompileTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("positive integer", result.stderr)
 
+
+
+    def test_saved_temporary_files_are_preserved_during_syntax_checks(self):
+        cases = []
+        gcc = shutil.which("gcc")
+        clang = shutil.which("clang")
+        if gcc is not None:
+            cases.extend((gcc, option) for option in
+                         ("-save-temps", "-save-temps=cwd", "-save-temps=obj", "--save-temps"))
+        if clang is not None:
+            cases.extend((clang, option) for option in
+                         ("-save-temps", "-save-temps=cwd", "-save-temps=obj", "--save-temps",
+                          "--save-temps=cwd", "--save-temps=obj"))
+        if not cases:
+            self.skipTest("needs GCC or Clang")
+        source = self.source("unit.c")
+        for index, (compiler, option) in enumerate(cases):
+            with self.subTest(compiler=compiler, option=option):
+                directory = self.build / str(index)
+                directory.mkdir()
+                source.write_text("int original;\n", encoding="utf-8")
+                arguments = [compiler, option, "-c", str(source), "-o", str(directory / "a-unit.o")]
+                original = subprocess.run(arguments, cwd=directory, capture_output=True, text=True)
+                self.assertEqual(original.returncode, 0, original.stderr)
+                self.assertTrue(list(directory.rglob("*.i")))
+                outputs = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+                self.manifest([{"directory": str(directory), "file": str(source),
+                                "arguments": arguments}])
+                for text, status in (("int changed;\n", 0), ("#error syntax_check_must_fail\n", 1)):
+                    source.write_text(text, encoding="utf-8")
+                    result = self.tool("unit.c")
+                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                    if status:
+                        self.assertIn("syntax_check_must_fail", result.stderr)
+                    else:
+                        self.assertIn("1 translation units compile", result.stdout)
+                    for path, content in outputs.items():
+                        self.assertEqual(path.read_bytes(), content, str(path))
+                    self.assertEqual({path for path in directory.rglob("*") if path.is_file()}, set(outputs))
 
 
 if __name__ == "__main__":
